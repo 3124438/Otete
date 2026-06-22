@@ -2,211 +2,469 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>表示画面 - 高度なトラッキング</title>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hand Gesture Display</title>
   <style>
-    body { margin: 0; overflow: hidden; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
-    .container { position: relative; width: 100%; max-width: 800px; aspect-ratio: 4/3; }
-    /* カメラ映像（左右反転） */
-    .input_video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 1; }
-    /* 骨格描画キャンバス（左右反転） */
-    .output_canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 2; }
-    
-    /* オーバーレイ画像（CSSを変更：初期位置を左上に、サイズをJSで指定） */
-    .overlay_image { 
-      position: absolute; 
-      top: 0; left: 0;
-      /* 初期サイズは0。JSで計算して設定 */
-      width: 0px; height: auto;
-      object-fit: contain;
-      z-index: 3; 
-      opacity: 0; 
-      /* 不透明度の変化を滑らかに */
-      transition: opacity 0.5s ease; 
-      pointer-events: none;
-      /* 重要: 画像の中心を座標に合わせる設定 */
-      transform: translate(-50%, -50%); 
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0a0e1a;
+      font-family: 'Space Grotesk', sans-serif;
+      color: #fff;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
     }
-    
-    /* ゲージ表示用 */
-    #progress { position: absolute; top: 10px; left: 10px; color: lime; font-weight: bold; z-index: 4; font-size: 24px; text-shadow: 1px 1px 2px #000; }
+
+    #scene {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    #video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      z-index: 1;
+    }
+
+    #skeleton-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1);
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    #overlay-img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      z-index: 3;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+      pointer-events: none;
+    }
+
+    #overlay-img.visible {
+      opacity: 1;
+    }
+
+    /* HUD */
+    #hud {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 10;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(to bottom, rgba(10,14,26,0.85) 0%, transparent 100%);
+      pointer-events: none;
+    }
+
+    #hud-title {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #00d4ff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #hud-title::before {
+      content: '';
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #00d4ff;
+      box-shadow: 0 0 8px #00d4ff;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    #hud-status {
+      font-size: 12px;
+      color: rgba(255,255,255,0.5);
+      font-weight: 400;
+    }
+
+    /* Progress bar */
+    #progress-wrap {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      width: 240px;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+    }
+
+    #progress-wrap.active {
+      opacity: 1;
+    }
+
+    #progress-label {
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #00d4ff;
+      text-align: center;
+      margin-bottom: 6px;
+    }
+
+    #progress-track {
+      height: 3px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+
+    #progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #00d4ff, #7b8cde);
+      border-radius: 99px;
+      transition: width 0.1s linear;
+      box-shadow: 0 0 8px #00d4ff88;
+    }
+
+    /* No camera state */
+    #no-camera {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+      gap: 12px;
+      background: #0a0e1a;
+    }
+
+    #no-camera svg { opacity: 0.3; }
+    #no-camera p { color: rgba(255,255,255,0.4); font-size: 14px; }
+
+    /* Hand count badge */
+    #hand-count {
+      position: absolute;
+      top: 16px;
+      right: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.5);
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    #hand-count span {
+      color: #00d4ff;
+      font-size: 15px;
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
 
-<div class="container">
-  <video class="input_video" autoplay playsinline></video>
-  <canvas class="output_canvas" width="1280" height="960"></canvas>
-  <img class="overlay_image" id="targetImage" src="">
-  <div id="progress">待機中...</div>
+<div id="scene">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="skeleton-canvas"></canvas>
+  <img id="overlay-img" src="" alt="">
+
+  <div id="hud">
+    <div id="hud-title">Hand Gesture System</div>
+    <div id="hud-status" id="hud-status">Initializing...</div>
+  </div>
+
+  <div id="hand-count">検出: <span id="hand-count-num">0</span> 手</div>
+
+  <div id="progress-wrap">
+    <div id="progress-label">ジェスチャー認識中</div>
+    <div id="progress-track">
+      <div id="progress-bar"></div>
+    </div>
+  </div>
+
+  <div id="no-camera">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5">
+      <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+    </svg>
+    <p>カメラを初期化中...</p>
+  </div>
 </div>
 
+<!-- MediaPipe -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
 <script>
-  const videoElement = document.querySelector('.input_video');
-  const canvasElement = document.querySelector('.output_canvas');
-  const canvasCtx = canvasElement.getContext('2d');
-  const targetImage = document.getElementById('targetImage');
-  const progressText = document.getElementById('progress');
+// ---- DOM refs ----
+const videoEl      = document.getElementById('video');
+const canvasEl     = document.getElementById('skeleton-canvas');
+const ctx          = canvasEl.getContext('2d');
+const overlayImg   = document.getElementById('overlay-img');
+const progressWrap = document.getElementById('progress-wrap');
+const progressBar  = document.getElementById('progress-bar');
+const hudStatus    = document.getElementById('hud-status');
+const handCountEl  = document.getElementById('hand-count-num');
+const noCameraEl   = document.getElementById('no-camera');
 
-  // 初期設定
-  let config = {
-    showSkeleton: true, imageUrl: "", durationSeconds: 2.0, targetHand: "Both",
-    fingers: { thumb: "Ignore", index: "Extended", middle: "Extended", ring: "Bent", pinky: "Bent" }
-  };
+// ---- State ----
+let settings = {
+  showSkeleton: true,
+  imageUrl: '',
+  durationSeconds: 3.0,
+  targetHand: 'Both',
+  fingers: {
+    thumb: 'Ignore',
+    index: 'Ignore',
+    middle: 'Ignore',
+    ring: 'Ignore',
+    pinky: 'Ignore'
+  }
+};
 
-  // BroadcastChannelで設定を受信
-  const bc = new BroadcastChannel('hand-gesture-channel');
-  bc.onmessage = (event) => {
-    config = event.data;
-    targetImage.src = config.imageUrl;
-    // URLが変わった瞬間、古い画像の残像を防ぐため一瞬非表示に
-    if(!isImageShown) targetImage.style.opacity = 0; 
-  };
+let gestureStartTime = null;
+let overlayVisible = false;
+let lastResults = null;
 
-  // 判定用変数
-  let gestureStartTime = null;
-  let isImageShown = false;
+// ---- BroadcastChannel ----
+const channel = new BroadcastChannel('hand-gesture-channel');
+channel.onmessage = (e) => {
+  if (e.data && e.data.type === 'settings') {
+    settings = e.data.payload;
+    applySettings();
+  }
+};
 
-  // ２点間の距離を計算する関数（遠近感の計算用）
-  function getDistance(p1, p2) {
-    return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+function applySettings() {
+  canvasEl.style.display = settings.showSkeleton ? 'block' : 'none';
+  if (settings.imageUrl && overlayImg.src !== settings.imageUrl) {
+    overlayImg.src = settings.imageUrl;
+  }
+}
+
+// ---- Canvas resize ----
+function resizeCanvas() {
+  canvasEl.width  = window.innerWidth;
+  canvasEl.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ---- Finger bend detection ----
+// Landmark indices
+const FINGER_TIPS = { thumb: 4, index: 8, middle: 12, ring: 16, pinky: 20 };
+const FINGER_PIPS = { index: 6, middle: 10, ring: 14, pinky: 18 };
+const FINGER_MCPS = { index: 5, middle: 9, ring: 13, pinky: 17 };
+
+function isFingerExtended(landmarks, finger) {
+  if (finger === 'thumb') {
+    // Thumb: compare tip (4) vs MCP (2) x-distance relative to wrist (0)
+    const tip = landmarks[4];
+    const ip  = landmarks[3];
+    const mcp = landmarks[2];
+    const wrist = landmarks[0];
+    // Use distance from wrist to tip vs wrist to MCP
+    const distTip = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
+    const distMcp = Math.hypot(mcp.x - wrist.x, mcp.y - wrist.y);
+    return distTip > distMcp * 1.15;
+  } else {
+    const tip = landmarks[FINGER_TIPS[finger]];
+    const pip = landmarks[FINGER_PIPS[finger]];
+    const mcp = landmarks[FINGER_MCPS[finger]];
+    // Extended: tip is farther from wrist than PIP, and tip.y < pip.y (in normalized coords, y increases downward)
+    const wrist = landmarks[0];
+    const distTip = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
+    const distPip = Math.hypot(pip.x - wrist.x, pip.y - wrist.y);
+    return distTip > distPip * 1.05;
+  }
+}
+
+function checkFingerCondition(landmarks, finger, condition) {
+  if (condition === 'Ignore') return true;
+  const extended = isFingerExtended(landmarks, finger);
+  if (condition === 'Extended') return extended;
+  if (condition === 'Bent') return !extended;
+  return true;
+}
+
+// ---- Hand matches settings ----
+function handMatchesSettings(landmarks, handedness) {
+  // Check handedness
+  if (settings.targetHand !== 'Both') {
+    // MediaPipe label is mirrored because we flip the display
+    // MediaPipe 'Right' → actual left hand on screen (mirrored)
+    const corrected = handedness.label === 'Right' ? 'Left' : 'Right';
+    if (handedness.score < 0.7) return false; // low confidence → skip strict check
+    if (corrected !== settings.targetHand) return false;
   }
 
-  // 指の曲げ判定ロジック
-  function checkFinger(landmarks, tipIdx, pipIdx, state) {
-    if (state === "Ignore") return true;
-    const isBent = landmarks[tipIdx].y > landmarks[pipIdx].y;
-    return state === "Bent" ? isBent : !isBent;
+  // Check each finger
+  for (const [finger, condition] of Object.entries(settings.fingers)) {
+    if (!checkFingerCondition(landmarks, finger, condition)) return false;
   }
+  return true;
+}
 
-  // 親指の判定
-  function checkThumb(landmarks, state) {
-    if (state === "Ignore") return true;
-    const distanceX = Math.abs(landmarks[4].x - landmarks[17].x);
-    const isBent = distanceX < 0.1;
-    return state === "Bent" ? isBent : !isBent;
+// ---- Overlay logic ----
+function setOverlay(visible) {
+  if (visible === overlayVisible) return;
+  overlayVisible = visible;
+  if (visible) {
+    overlayImg.classList.add('visible');
+  } else {
+    overlayImg.classList.remove('visible');
   }
+}
 
-  // MediaPipeの推論結果が返ってきた時の処理
-  function onResults(results) {
-    // 1. キャンバスのクリアと骨格描画（スタイル修正版）
-    canvasCtx.save();
-    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-    
-    if (config.showSkeleton && results.multiHandLandmarks) {
-      for (const landmarks of results.multiHandLandmarks) {
-        // ★線を補足（lineWidth: 1.5）
-        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 1.5});
-        // ★点を小さく（radius: 1, lineWidth: 0.5）
-        drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 0.5, radius: 1});
-      }
-    }
-    canvasCtx.restore();
+// ---- Drawing ----
+const LANDMARK_COLOR = '#00d4ff';
+const CONNECTION_COLOR = 'rgba(0, 212, 255, 0.5)';
 
-    // 2. ジェスチャー判定とトラッキング情報の取得
-    let isAnyHandMatching = false;
-    let matchingHandLandmarks = null; // 条件を満たした手の座標を保存
+function drawHands(results) {
+  ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+  if (!results.multiHandLandmarks) return;
 
-    if (results.multiHandLandmarks && results.multiHandedness) {
-      for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-        const landmarks = results.multiHandLandmarks[i];
-        let handLabel = results.multiHandedness[i].label; // "Left" or "Right"
-        
-        // カメラ映像を左右反転させているため、MediaPipeの左右判定も補正
-        handLabel = handLabel === "Left" ? "Right" : "Left";
+  results.multiHandLandmarks.forEach((landmarks, i) => {
+    const handedness = results.multiHandedness[i];
 
-        // 左右の指定チェック
-        if (config.targetHand !== "Both" && config.targetHand !== handLabel) continue;
+    // Draw connections
+    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
+      color: CONNECTION_COLOR,
+      lineWidth: 2
+    });
 
-        // 指の形チェック
-        const thumbMatch = checkThumb(landmarks, config.fingers.thumb);
-        const indexMatch = checkFinger(landmarks, 8, 6, config.fingers.index);
-        const middleMatch = checkFinger(landmarks, 12, 10, config.fingers.middle);
-        const ringMatch = checkFinger(landmarks, 16, 14, config.fingers.ring);
-        const pinkyMatch = checkFinger(landmarks, 20, 18, config.fingers.pinky);
+    // Draw landmarks
+    drawLandmarks(ctx, landmarks, {
+      color: LANDMARK_COLOR,
+      fillColor: 'rgba(10,14,26,0.8)',
+      lineWidth: 1,
+      radius: 4
+    });
 
-        if (thumbMatch && indexMatch && middleMatch && ringMatch && pinkyMatch) {
-          isAnyHandMatching = true;
-          matchingHandLandmarks = landmarks; // この手の座標を使って画像を動かす
-          break; // 最初に見つかった手を対象にする
-        }
-      }
-    }
-
-    // 3. 維持時間のカウントと画像表示/移動処理
-    if (isAnyHandMatching && matchingHandLandmarks) {
-      if (!gestureStartTime) gestureStartTime = Date.now();
-      
-      let elapsed = (Date.now() - gestureStartTime) / 1000;
-      progressText.innerText = `認識中... ${elapsed.toFixed(1)} / ${config.durationSeconds} 秒`;
-
-      // 指定時間に達したらフラグを立てる（CSS transitionでフェードイン）
-      if (elapsed >= config.durationSeconds && !isImageShown) {
-        isImageShown = true;
-        targetImage.style.opacity = 1;
-        progressText.innerText = "完了！";
-      }
-
-      // ★★★ 画像の手へのトラッキング＆拡縮処理（ここが核心） ★★★
-      if (isImageShown) {
-        // A. 貼り付ける位置（中心）を決める
-        // 中指の付け根（ランドマーク 9）をアンカーにする
-        const anchor = matchingHandLandmarks[9];
-
-        // MediaPipeの座標（0.0〜1.0）を、CSSのピクセル座標（%）に変換
-        // 映像がscaleX(-1)で反転しているため、X座標の計算を補正 (1 - x)
-        const posX = (1 - anchor.x) * 100; 
-        const posY = anchor.y * 100;
-
-        // B. 画像のサイズ（遠近感）を決める
-        // 手首(0)と人差指の付け根(5)の距離を「手の大きさの基準」とする
-        const handSize = getDistance(matchingHandLandmarks[0], matchingHandLandmarks[5]);
-        
-        // 基準となる画像の太さ（画面横幅に対する割合。調整可能）
-        const baseWidthPercent = 30; 
-        // 手の大きさ（手首〜人差指根元の距離）に比例して画像を拡縮
-        // 手が画面いっぱい（距離1.0）の時、横幅の120%になるような倍率(4)を掛ける（感覚値）
-        const finalWidth = baseWidthPercent * (handSize * 4); 
-
-        // C. CSSを毎フレーム書き換えて画像を動かす
-        targetImage.style.left = `${posX}%`;
-        targetImage.style.top = `${posY}%`;
-        targetImage.style.width = `${finalWidth}%`; // %で指定することでコンテナサイズに追従
-      }
-
-    } else {
-      // 条件から外れたらリセット（フェードアウト）
-      gestureStartTime = null;
-      if (isImageShown) {
-        targetImage.style.opacity = 0;
-        isImageShown = false;
-        // 次回の表示のためにサイズをリセット
-        targetImage.style.width = "0px"; 
-      }
-      progressText.innerText = "待機中...";
-    }
-  }
-
-  // MediaPipe Handsの初期化（プロトタイプなのでmaxNumHandsは2のまま維持）
-  const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-  hands.setOptions({
-    maxNumHands: 2, 
-    modelComplexity: 1,
-    minDetectionConfidence: 0.7, // 認識精度を少し上げる
-    minTrackingConfidence: 0.7
+    // Label
+    const wrist = landmarks[0];
+    const corrected = handedness.label === 'Right' ? 'Left' : 'Right';
+    const label = corrected === 'Left' ? '左手' : '右手';
+    ctx.save();
+    ctx.font = '600 12px Space Grotesk, sans-serif';
+    ctx.fillStyle = '#00d4ff';
+    ctx.shadowColor = '#00d4ff';
+    ctx.shadowBlur = 6;
+    ctx.fillText(label, wrist.x * canvasEl.width + 8, wrist.y * canvasEl.height - 8);
+    ctx.restore();
   });
-  hands.onResults(onResults);
+}
 
-  // カメラの起動
-  const camera = new Camera(videoElement, {
-    onFrame: async () => { await hands.send({image: videoElement}); },
-    width: 1280, height: 960 // 推論解像度を上げる
-  });
-  camera.start();
+// ---- MediaPipe Hands ----
+const hands = new Hands({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 10,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5
+});
+
+hands.onResults((results) => {
+  lastResults = results;
+  const count = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
+  handCountEl.textContent = count;
+
+  if (settings.showSkeleton) {
+    drawHands(results);
+  } else {
+    ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+  }
+
+  // Gesture check
+  let anyMatch = false;
+  if (results.multiHandLandmarks && results.multiHandedness) {
+    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+      if (handMatchesSettings(results.multiHandLandmarks[i], results.multiHandedness[i])) {
+        anyMatch = true;
+        break;
+      }
+    }
+  }
+
+  const now = performance.now();
+  const dur = settings.durationSeconds * 1000;
+
+  if (anyMatch) {
+    if (gestureStartTime === null) gestureStartTime = now;
+    const elapsed = now - gestureStartTime;
+    const pct = Math.min(elapsed / dur * 100, 100);
+
+    progressWrap.classList.add('active');
+    progressBar.style.width = pct + '%';
+
+    if (elapsed >= dur) {
+      setOverlay(true);
+      progressWrap.classList.remove('active');
+    }
+  } else {
+    gestureStartTime = null;
+    progressBar.style.width = '0%';
+    progressWrap.classList.remove('active');
+    setOverlay(false);
+  }
+});
+
+// ---- Camera ----
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+    });
+    videoEl.srcObject = stream;
+    videoEl.onloadedmetadata = () => {
+      noCameraEl.style.display = 'none';
+      hudStatus.textContent = 'カメラ起動中';
+      const camera = new Camera(videoEl, {
+        onFrame: async () => {
+          await hands.send({ image: videoEl });
+        },
+        width: 1280,
+        height: 720
+      });
+      camera.start();
+      hudStatus.textContent = 'トラッキング中';
+    };
+  } catch (err) {
+    console.error(err);
+    noCameraEl.querySelector('p').textContent = 'カメラへのアクセスが拒否されました';
+    hudStatus.textContent = 'カメラエラー';
+  }
+}
+
+startCamera();
 </script>
-
 </body>
 </html>
