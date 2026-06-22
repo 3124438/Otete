@@ -2,158 +2,809 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>表示画面 - カメラ認識</title>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hand Gesture Admin</title>
   <style>
-    body { margin: 0; overflow: hidden; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
-    .container { position: relative; width: 100%; max-width: 800px; aspect-ratio: 4/3; }
-    /* カメラ映像（左右反転させる） */
-    .input_video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 1; }
-    /* 骨格描画キャンバス（映像に合わせるためこれも反転） */
-    .output_canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 2; }
-    /* オーバーレイ画像（フェードイン/アウト） */
-    .overlay_image { 
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain;
-      z-index: 3; opacity: 0; transition: opacity 0.5s ease; pointer-events: none;
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0a0e1a;
+      --surface:  #111827;
+      --card:     #1a2035;
+      --border:   rgba(255,255,255,0.08);
+      --accent:   #00d4ff;
+      --accent2:  #7b8cde;
+      --danger:   #ff4d6d;
+      --success:  #00e5a0;
+      --text:     #ffffff;
+      --muted:    rgba(255,255,255,0.45);
+      --input-bg: rgba(255,255,255,0.05);
     }
-    /* ゲージ表示用 */
-    #progress { position: absolute; top: 10px; left: 10px; color: lime; font-weight: bold; z-index: 4; font-size: 24px; text-shadow: 1px 1px 2px #000; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      font-family: 'Space Grotesk', sans-serif;
+      color: var(--text);
+      min-height: 100vh;
+      padding: 0 0 60px;
+    }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #0d1224 0%, #111827 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .logo-text {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .logo-sub {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 400;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .status-dot {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: blink 2s infinite;
+    }
+
+    .dot.off { background: var(--muted); box-shadow: none; animation: none; }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* ── Layout ── */
+    .main {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 28px 20px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ── Card ── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 16px 20px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      background: rgba(0, 212, 255, 0.12);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .card-body {
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ── Form elements ── */
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select {
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      color: var(--text);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 10px 14px;
+      width: 100%;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      -webkit-appearance: none;
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(0,212,255,0.12);
+    }
+
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2300d4ff' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 36px;
+      cursor: pointer;
+    }
+
+    select option { background: #1a2035; }
+
+    /* ── Toggle ── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .toggle-label {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .toggle-desc {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: rgba(255,255,255,0.1);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.25s;
+    }
+
+    .toggle-slider::after {
+      content: '';
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.25s;
+    }
+
+    .toggle input:checked + .toggle-slider {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+    }
+
+    .toggle input:checked + .toggle-slider::after {
+      transform: translateX(20px);
+    }
+
+    /* ── Finger grid (signature element) ── */
+    .finger-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+    }
+
+    .finger-slot {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .finger-visual {
+      width: 100%;
+      aspect-ratio: 1 / 2.2;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      padding-bottom: 4px;
+    }
+
+    /* Finger segments */
+    .finger-segments {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      width: 100%;
+      height: 100%;
+      justify-content: flex-end;
+    }
+
+    .seg {
+      border-radius: 4px;
+      width: 60%;
+      transition: background 0.25s, box-shadow 0.25s;
+      background: rgba(255,255,255,0.08);
+    }
+
+    .seg.s1 { height: 22%; }
+    .seg.s2 { height: 22%; }
+    .seg.s3 { height: 22%; }
+    .seg-base {
+      width: 80%;
+      height: 14%;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.12);
+      transition: background 0.25s;
+    }
+
+    /* Extended state */
+    .finger-slot.state-extended .seg {
+      background: linear-gradient(180deg, var(--accent) 0%, rgba(0,212,255,0.4) 100%);
+      box-shadow: 0 0 8px rgba(0,212,255,0.4);
+    }
+    .finger-slot.state-extended .seg-base { background: rgba(0,212,255,0.3); }
+
+    /* Bent state */
+    .finger-slot.state-bent .seg {
+      background: linear-gradient(180deg, var(--danger) 0%, rgba(255,77,109,0.4) 100%);
+      box-shadow: 0 0 8px rgba(255,77,109,0.3);
+    }
+    .finger-slot.state-bent .seg-base { background: rgba(255,77,109,0.3); }
+
+    /* Ignore state */
+    .finger-slot.state-ignore .seg { background: rgba(255,255,255,0.06); }
+
+    .finger-name {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .finger-slot select {
+      font-size: 11px;
+      padding: 6px 8px;
+      padding-right: 26px;
+      background-position: right 6px center;
+      background-size: 10px;
+    }
+
+    /* ── Legend ── */
+    .legend {
+      display: flex;
+      gap: 14px;
+      justify-content: flex-end;
+      padding: 0 0 4px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .legend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+    }
+
+    .legend-dot.extended { background: var(--accent); }
+    .legend-dot.bent     { background: var(--danger); }
+    .legend-dot.ignore   { background: rgba(255,255,255,0.15); }
+
+    /* ── Row layout ── */
+    .row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    /* ── Send button ── */
+    .send-btn {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none;
+      border-radius: 10px;
+      color: #0a0e1a;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 13px 24px;
+      cursor: pointer;
+      width: 100%;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+
+    .send-btn:hover { opacity: 0.9; }
+    .send-btn:active { transform: scale(0.98); }
+
+    /* ── Preset chips ── */
+    .presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .preset-chip {
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--text);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 14px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      white-space: nowrap;
+    }
+
+    .preset-chip:hover {
+      border-color: var(--accent);
+      background: rgba(0,212,255,0.08);
+      color: var(--accent);
+    }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(16px);
+      background: #1a2035;
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 10px 20px;
+      opacity: 0;
+      transition: opacity 0.25s, transform 0.25s;
+      pointer-events: none;
+      z-index: 200;
+      white-space: nowrap;
+    }
+
+    #toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* ── Section label ── */
+    .section-eyebrow {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent2);
+      padding: 4px 0;
+    }
+
+    /* ── Input group ── */
+    .input-group {
+      position: relative;
+    }
+
+    .input-suffix {
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 12px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+
+    .input-group input { padding-right: 40px; }
+
+    /* Open display link */
+    .open-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+      padding: 6px 0;
+      transition: opacity 0.2s;
+    }
+    .open-link:hover { opacity: 0.75; }
   </style>
 </head>
 <body>
 
-<div class="container">
-  <video class="input_video" autoplay playsinline></video>
-  <canvas class="output_canvas" width="800" height="600"></canvas>
-  <img class="overlay_image" id="targetImage" src="">
-  <div id="progress">待機中...</div>
-</div>
+<header>
+  <div class="logo">
+    <div class="logo-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">
+        <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/>
+        <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/>
+        <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/>
+        <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
+      </svg>
+    </div>
+    <div>
+      <div class="logo-text">Gesture Admin</div>
+      <div class="logo-sub">Hand Recognition System</div>
+    </div>
+  </div>
+  <div class="status-dot">
+    <div class="dot" id="broadcast-dot"></div>
+    <span id="broadcast-label">接続中</span>
+  </div>
+</header>
+
+<main class="main">
+
+  <!-- Display / Skeleton -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+        </svg>
+      </div>
+      <div class="card-title">表示設定</div>
+    </div>
+    <div class="card-body">
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">骨格表示</div>
+          <div class="toggle-desc">ランドマーク＆コネクションを表示</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="show-skeleton" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="field">
+        <label for="image-url">オーバーレイ画像 URL</label>
+        <input type="text" id="image-url" placeholder="https://example.com/image.png">
+      </div>
+
+      <a class="open-link" href="index.html" target="_blank">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+          <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+        </svg>
+        表示画面を開く
+      </a>
+    </div>
+  </div>
+
+  <!-- Trigger settings -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </div>
+      <div class="card-title">トリガー設定</div>
+    </div>
+    <div class="card-body">
+      <div class="row-2">
+        <div class="field">
+          <label for="duration">維持時間</label>
+          <div class="input-group">
+            <input type="number" id="duration" value="3" min="0.1" max="30" step="0.1">
+            <span class="input-suffix">秒</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="target-hand">対象の手</label>
+          <select id="target-hand">
+            <option value="Both">どちらでも</option>
+            <option value="Right">右手</option>
+            <option value="Left">左手</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Finger config -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2">
+          <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/>
+        </svg>
+      </div>
+      <div class="card-title">指の状態設定</div>
+    </div>
+    <div class="card-body">
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot extended"></div>伸ばす</div>
+        <div class="legend-item"><div class="legend-dot bent"></div>曲げる</div>
+        <div class="legend-item"><div class="legend-dot ignore"></div>無視</div>
+      </div>
+
+      <div class="finger-grid" id="finger-grid">
+        <!-- Fingers rendered by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Presets -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+        </svg>
+      </div>
+      <div class="card-title">プリセット</div>
+    </div>
+    <div class="card-body">
+      <div class="presets">
+        <button class="preset-chip" data-preset="peace">✌ ピース</button>
+        <button class="preset-chip" data-preset="thumbsup">👍 サムズアップ</button>
+        <button class="preset-chip" data-preset="fist">✊ グー</button>
+        <button class="preset-chip" data-preset="open">🖐 パー</button>
+        <button class="preset-chip" data-preset="point">☝ 人差し指</button>
+        <button class="preset-chip" data-preset="rock">🤘 ロック</button>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<div id="toast">設定を送信しました</div>
 
 <script>
-  const videoElement = document.querySelector('.input_video');
-  const canvasElement = document.querySelector('.output_canvas');
-  const canvasCtx = canvasElement.getContext('2d');
-  const targetImage = document.getElementById('targetImage');
-  const progressText = document.getElementById('progress');
+// ---- Finger metadata ----
+const FINGERS = [
+  { key: 'thumb',  label: '親指' },
+  { key: 'index',  label: '人差し' },
+  { key: 'middle', label: '中指' },
+  { key: 'ring',   label: '薬指' },
+  { key: 'pinky',  label: '小指' }
+];
 
-  // 初期設定（管理画面から受信するまでの一時データ）
-  let config = {
-    showSkeleton: true, imageUrl: "", durationSeconds: 2.0, targetHand: "Both",
-    fingers: { thumb: "Ignore", index: "Extended", middle: "Extended", ring: "Bent", pinky: "Bent" }
-  };
+const STATES = [
+  { value: 'Ignore',   label: '無視' },
+  { value: 'Extended', label: '伸ばす' },
+  { value: 'Bent',     label: '曲げる' }
+];
 
-  // BroadcastChannelで設定を受信
-  const bc = new BroadcastChannel('hand-gesture-channel');
-  bc.onmessage = (event) => {
-    config = event.data;
-    targetImage.src = config.imageUrl;
-    if(!config.showSkeleton) canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-  };
-
-  // 判定用変数
-  let gestureStartTime = null;
-  let isImageShown = false;
-
-  // 指の曲げ判定ロジック（簡易版：Y座標での比較。手が上を向いている前提）
-  function checkFinger(landmarks, tipIdx, pipIdx, state) {
-    if (state === "Ignore") return true;
-    // 指先(tip)のY座標が第2関節(pip)より下(数値が大きい)なら曲がっていると判定
-    const isBent = landmarks[tipIdx].y > landmarks[pipIdx].y;
-    return state === "Bent" ? isBent : !isBent;
+// Current settings
+let settings = {
+  showSkeleton: true,
+  imageUrl: '',
+  durationSeconds: 3.0,
+  targetHand: 'Both',
+  fingers: {
+    thumb: 'Ignore',
+    index: 'Ignore',
+    middle: 'Ignore',
+    ring: 'Ignore',
+    pinky: 'Ignore'
   }
+};
 
-  // 親指の判定（X座標での距離判定など工夫が必要だが、プロトタイプとして簡易的に実装）
-  function checkThumb(landmarks, state) {
-    if (state === "Ignore") return true;
-    // 親指の先端(4)が、小指の付け根(17)に近いかどうかで曲がりを判定
-    const distanceX = Math.abs(landmarks[4].x - landmarks[17].x);
-    const isBent = distanceX < 0.1; // 閾値は感覚値
-    return state === "Bent" ? isBent : !isBent;
-  }
+// ---- BroadcastChannel ----
+const channel = new BroadcastChannel('hand-gesture-channel');
 
-  // MediaPipeの推論結果が返ってきた時の処理
-  function onResults(results) {
-    if (config.showSkeleton) {
-      canvasCtx.save();
-      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-      if (results.multiHandLandmarks) {
-        for (const landmarks of results.multiHandLandmarks) {
-          drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
-          drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
-        }
-      }
-      canvasCtx.restore();
-    }
+function broadcast() {
+  channel.postMessage({ type: 'settings', payload: { ...settings, fingers: { ...settings.fingers } } });
+  showToast('設定を送信しました');
+}
 
-    let isAnyHandMatching = false;
+// Auto-broadcast with debounce
+let broadcastTimer = null;
+function debouncedBroadcast() {
+  clearTimeout(broadcastTimer);
+  broadcastTimer = setTimeout(broadcast, 120);
+}
 
-    if (results.multiHandLandmarks && results.multiHandedness) {
-      for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-        const landmarks = results.multiHandLandmarks[i];
-        let handLabel = results.multiHandedness[i].label; // "Left" or "Right"
-        
-        // ★重要: カメラ映像を左右反転させているため、MediaPipeの左右判定も反転させる
-        handLabel = handLabel === "Left" ? "Right" : "Left";
+// ---- Build finger grid ----
+function buildFingerGrid() {
+  const grid = document.getElementById('finger-grid');
+  grid.innerHTML = '';
 
-        // 左右の指定チェック
-        if (config.targetHand !== "Both" && config.targetHand !== handLabel) continue;
+  FINGERS.forEach(finger => {
+    const slot = document.createElement('div');
+    slot.className = 'finger-slot state-ignore';
+    slot.id = `slot-${finger.key}`;
 
-        // 指の形チェック
-        const thumbMatch = checkThumb(landmarks, config.fingers.thumb);
-        const indexMatch = checkFinger(landmarks, 8, 6, config.fingers.index);
-        const middleMatch = checkFinger(landmarks, 12, 10, config.fingers.middle);
-        const ringMatch = checkFinger(landmarks, 16, 14, config.fingers.ring);
-        const pinkyMatch = checkFinger(landmarks, 20, 18, config.fingers.pinky);
+    slot.innerHTML = `
+      <div class="finger-visual">
+        <div class="finger-segments">
+          <div class="seg s1"></div>
+          <div class="seg s2"></div>
+          <div class="seg s3"></div>
+          <div class="seg-base"></div>
+        </div>
+      </div>
+      <div class="finger-name">${finger.label}</div>
+      <select data-finger="${finger.key}">
+        ${STATES.map(s => `<option value="${s.value}"${s.value === 'Ignore' ? ' selected' : ''}>${s.label}</option>`).join('')}
+      </select>
+    `;
 
-        if (thumbMatch && indexMatch && middleMatch && ringMatch && pinkyMatch) {
-          isAnyHandMatching = true;
-          break;
-        }
-      }
-    }
+    const sel = slot.querySelector('select');
+    sel.addEventListener('change', () => {
+      settings.fingers[finger.key] = sel.value;
+      updateFingerVisual(finger.key, sel.value);
+      debouncedBroadcast();
+    });
 
-    // 維持時間のカウントアップ / リセット処理
-    if (isAnyHandMatching) {
-      if (!gestureStartTime) gestureStartTime = Date.now();
-      
-      let elapsed = (Date.now() - gestureStartTime) / 1000;
-      progressText.innerText = `認識中... ${elapsed.toFixed(1)} / ${config.durationSeconds} 秒`;
-
-      if (elapsed >= config.durationSeconds && !isImageShown) {
-        targetImage.style.opacity = 1;
-        isImageShown = true;
-        progressText.innerText = "完了！";
-      }
-    } else {
-      gestureStartTime = null;
-      if (isImageShown) {
-        targetImage.style.opacity = 0;
-        isImageShown = false;
-      }
-      progressText.innerText = "待機中...";
-    }
-  }
-
-  // MediaPipe Handsの初期化
-  const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-  hands.setOptions({
-    maxNumHands: 2, // プロトタイプなので動作を軽くするために2に設定
-    modelComplexity: 1,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
+    grid.appendChild(slot);
   });
-  hands.onResults(onResults);
+}
 
-  // カメラの起動
-  const camera = new Camera(videoElement, {
-    onFrame: async () => { await hands.send({image: videoElement}); },
-    width: 800, height: 600
+function updateFingerVisual(key, state) {
+  const slot = document.getElementById(`slot-${key}`);
+  if (!slot) return;
+  slot.className = `finger-slot state-${state.toLowerCase()}`;
+}
+
+function setFingerState(key, value) {
+  settings.fingers[key] = value;
+  const sel = document.querySelector(`select[data-finger="${key}"]`);
+  if (sel) sel.value = value;
+  updateFingerVisual(key, value);
+}
+
+// ---- Presets ----
+const PRESETS = {
+  peace: {
+    thumb: 'Ignore', index: 'Extended', middle: 'Extended', ring: 'Bent', pinky: 'Bent'
+  },
+  thumbsup: {
+    thumb: 'Extended', index: 'Bent', middle: 'Bent', ring: 'Bent', pinky: 'Bent'
+  },
+  fist: {
+    thumb: 'Bent', index: 'Bent', middle: 'Bent', ring: 'Bent', pinky: 'Bent'
+  },
+  open: {
+    thumb: 'Extended', index: 'Extended', middle: 'Extended', ring: 'Extended', pinky: 'Extended'
+  },
+  point: {
+    thumb: 'Ignore', index: 'Extended', middle: 'Bent', ring: 'Bent', pinky: 'Bent'
+  },
+  rock: {
+    thumb: 'Ignore', index: 'Extended', middle: 'Bent', ring: 'Bent', pinky: 'Extended'
+  }
+};
+
+document.querySelectorAll('.preset-chip').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const preset = PRESETS[btn.dataset.preset];
+    if (!preset) return;
+    Object.entries(preset).forEach(([finger, state]) => setFingerState(finger, state));
+    debouncedBroadcast();
   });
-  camera.start();
+});
+
+// ---- DOM wiring ----
+const skeletonToggle = document.getElementById('show-skeleton');
+const imageUrlInput  = document.getElementById('image-url');
+const durationInput  = document.getElementById('duration');
+const targetHandSel  = document.getElementById('target-hand');
+
+skeletonToggle.addEventListener('change', () => {
+  settings.showSkeleton = skeletonToggle.checked;
+  debouncedBroadcast();
+});
+
+imageUrlInput.addEventListener('input', () => {
+  settings.imageUrl = imageUrlInput.value.trim();
+  debouncedBroadcast();
+});
+
+durationInput.addEventListener('input', () => {
+  const v = parseFloat(durationInput.value);
+  if (!isNaN(v) && v > 0) {
+    settings.durationSeconds = v;
+    debouncedBroadcast();
+  }
+});
+
+targetHandSel.addEventListener('change', () => {
+  settings.targetHand = targetHandSel.value;
+  debouncedBroadcast();
+});
+
+// ---- Toast ----
+let toastTimer = null;
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 1800);
+}
+
+// ---- Init ----
+buildFingerGrid();
+
+// Send initial settings when page loads
+setTimeout(() => {
+  broadcast();
+}, 500);
 </script>
-
 </body>
 </html>
