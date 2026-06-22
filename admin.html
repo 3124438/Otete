@@ -2,79 +2,210 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>管理画面 - ジェスチャー設定</title>
+  <title>表示画面 - 高度なトラッキング</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
   <style>
-    body { font-family: sans-serif; padding: 20px; background-color: #f5f5f5; }
-    .card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 500px; }
-    label { display: block; margin-top: 15px; font-weight: bold; }
-    input, select { width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; }
-    .finger-group { display: flex; gap: 10px; margin-top: 5px; }
-    .finger-group div { flex: 1; }
+    body { margin: 0; overflow: hidden; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    .container { position: relative; width: 100%; max-width: 800px; aspect-ratio: 4/3; }
+    /* カメラ映像（左右反転） */
+    .input_video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 1; }
+    /* 骨格描画キャンバス（左右反転） */
+    .output_canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 2; }
+    
+    /* オーバーレイ画像（CSSを変更：初期位置を左上に、サイズをJSで指定） */
+    .overlay_image { 
+      position: absolute; 
+      top: 0; left: 0;
+      /* 初期サイズは0。JSで計算して設定 */
+      width: 0px; height: auto;
+      object-fit: contain;
+      z-index: 3; 
+      opacity: 0; 
+      /* 不透明度の変化を滑らかに */
+      transition: opacity 0.5s ease; 
+      pointer-events: none;
+      /* 重要: 画像の中心を座標に合わせる設定 */
+      transform: translate(-50%, -50%); 
+    }
+    
+    /* ゲージ表示用 */
+    #progress { position: absolute; top: 10px; left: 10px; color: lime; font-weight: bold; z-index: 4; font-size: 24px; text-shadow: 1px 1px 2px #000; }
   </style>
 </head>
 <body>
 
-<div class="card">
-  <h2>設定パネル</h2>
-  
-  <label>
-    <input type="checkbox" id="showSkeleton" checked style="width:auto;"> 骨格を表示する
-  </label>
-
-  <label>オーバーレイ画像 URL</label>
-  <input type="text" id="imageUrl" value="https://picsum.photos/600/400" placeholder="画像のURLを入力">
-
-  <label>維持時間（秒）</label>
-  <input type="number" id="durationSeconds" value="2.0" step="0.5" min="0">
-
-  <label>対象の手</label>
-  <select id="targetHand">
-    <option value="Both">どちらでも (両手)</option>
-    <option value="Right">右手</option>
-    <option value="Left">左手</option>
-  </select>
-
-  <h3>指の設定</h3>
-  <div class="finger-group">
-    <div>親指<select id="thumb"><option value="Ignore">無視</option><option value="Extended">伸ばす</option><option value="Bent">曲げる</option></select></div>
-    <div>人差指<select id="index"><option value="Extended">伸ばす</option><option value="Bent">曲げる</option><option value="Ignore">無視</option></select></div>
-    <div>中指<select id="middle"><option value="Extended">伸ばす</option><option value="Bent">曲げる</option><option value="Ignore">無視</option></select></div>
-    <div>薬指<select id="ring"><option value="Bent">曲げる</option><option value="Extended">伸ばす</option><option value="Ignore">無視</option></select></div>
-    <div>小指<select id="pinky"><option value="Bent">曲げる</option><option value="Extended">伸ばす</option><option value="Ignore">無視</option></select></div>
-  </div>
+<div class="container">
+  <video class="input_video" autoplay playsinline></video>
+  <canvas class="output_canvas" width="1280" height="960"></canvas>
+  <img class="overlay_image" id="targetImage" src="">
+  <div id="progress">待機中...</div>
 </div>
 
 <script>
-  // チャンネルの作成
-  const bc = new BroadcastChannel('hand-gesture-channel');
+  const videoElement = document.querySelector('.input_video');
+  const canvasElement = document.querySelector('.output_canvas');
+  const canvasCtx = canvasElement.getContext('2d');
+  const targetImage = document.getElementById('targetImage');
+  const progressText = document.getElementById('progress');
 
-  // 現在の設定を取得して送信する関数
-  function broadcastSettings() {
-    const payload = {
-      showSkeleton: document.getElementById('showSkeleton').checked,
-      imageUrl: document.getElementById('imageUrl').value,
-      durationSeconds: parseFloat(document.getElementById('durationSeconds').value) || 0,
-      targetHand: document.getElementById('targetHand').value,
-      fingers: {
-        thumb: document.getElementById('thumb').value,
-        index: document.getElementById('index').value,
-        middle: document.getElementById('middle').value,
-        ring: document.getElementById('ring').value,
-        pinky: document.getElementById('pinky').value
-      }
-    };
-    bc.postMessage(payload);
-    console.log("設定を送信しました:", payload);
+  // 初期設定
+  let config = {
+    showSkeleton: true, imageUrl: "", durationSeconds: 2.0, targetHand: "Both",
+    fingers: { thumb: "Ignore", index: "Extended", middle: "Extended", ring: "Bent", pinky: "Bent" }
+  };
+
+  // BroadcastChannelで設定を受信
+  const bc = new BroadcastChannel('hand-gesture-channel');
+  bc.onmessage = (event) => {
+    config = event.data;
+    targetImage.src = config.imageUrl;
+    // URLが変わった瞬間、古い画像の残像を防ぐため一瞬非表示に
+    if(!isImageShown) targetImage.style.opacity = 0; 
+  };
+
+  // 判定用変数
+  let gestureStartTime = null;
+  let isImageShown = false;
+
+  // ２点間の距離を計算する関数（遠近感の計算用）
+  function getDistance(p1, p2) {
+    return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
   }
 
-  // 入力が変更されたら即座に送信
-  document.querySelectorAll('input, select').forEach(el => {
-    el.addEventListener('change', broadcastSettings);
-    el.addEventListener('input', broadcastSettings);
-  });
+  // 指の曲げ判定ロジック
+  function checkFinger(landmarks, tipIdx, pipIdx, state) {
+    if (state === "Ignore") return true;
+    const isBent = landmarks[tipIdx].y > landmarks[pipIdx].y;
+    return state === "Bent" ? isBent : !isBent;
+  }
 
-  // 初期ロード時にも一回送信
-  window.onload = () => setTimeout(broadcastSettings, 1000);
+  // 親指の判定
+  function checkThumb(landmarks, state) {
+    if (state === "Ignore") return true;
+    const distanceX = Math.abs(landmarks[4].x - landmarks[17].x);
+    const isBent = distanceX < 0.1;
+    return state === "Bent" ? isBent : !isBent;
+  }
+
+  // MediaPipeの推論結果が返ってきた時の処理
+  function onResults(results) {
+    // 1. キャンバスのクリアと骨格描画（スタイル修正版）
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    
+    if (config.showSkeleton && results.multiHandLandmarks) {
+      for (const landmarks of results.multiHandLandmarks) {
+        // ★線を補足（lineWidth: 1.5）
+        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 1.5});
+        // ★点を小さく（radius: 1, lineWidth: 0.5）
+        drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 0.5, radius: 1});
+      }
+    }
+    canvasCtx.restore();
+
+    // 2. ジェスチャー判定とトラッキング情報の取得
+    let isAnyHandMatching = false;
+    let matchingHandLandmarks = null; // 条件を満たした手の座標を保存
+
+    if (results.multiHandLandmarks && results.multiHandedness) {
+      for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+        const landmarks = results.multiHandLandmarks[i];
+        let handLabel = results.multiHandedness[i].label; // "Left" or "Right"
+        
+        // カメラ映像を左右反転させているため、MediaPipeの左右判定も補正
+        handLabel = handLabel === "Left" ? "Right" : "Left";
+
+        // 左右の指定チェック
+        if (config.targetHand !== "Both" && config.targetHand !== handLabel) continue;
+
+        // 指の形チェック
+        const thumbMatch = checkThumb(landmarks, config.fingers.thumb);
+        const indexMatch = checkFinger(landmarks, 8, 6, config.fingers.index);
+        const middleMatch = checkFinger(landmarks, 12, 10, config.fingers.middle);
+        const ringMatch = checkFinger(landmarks, 16, 14, config.fingers.ring);
+        const pinkyMatch = checkFinger(landmarks, 20, 18, config.fingers.pinky);
+
+        if (thumbMatch && indexMatch && middleMatch && ringMatch && pinkyMatch) {
+          isAnyHandMatching = true;
+          matchingHandLandmarks = landmarks; // この手の座標を使って画像を動かす
+          break; // 最初に見つかった手を対象にする
+        }
+      }
+    }
+
+    // 3. 維持時間のカウントと画像表示/移動処理
+    if (isAnyHandMatching && matchingHandLandmarks) {
+      if (!gestureStartTime) gestureStartTime = Date.now();
+      
+      let elapsed = (Date.now() - gestureStartTime) / 1000;
+      progressText.innerText = `認識中... ${elapsed.toFixed(1)} / ${config.durationSeconds} 秒`;
+
+      // 指定時間に達したらフラグを立てる（CSS transitionでフェードイン）
+      if (elapsed >= config.durationSeconds && !isImageShown) {
+        isImageShown = true;
+        targetImage.style.opacity = 1;
+        progressText.innerText = "完了！";
+      }
+
+      // ★★★ 画像の手へのトラッキング＆拡縮処理（ここが核心） ★★★
+      if (isImageShown) {
+        // A. 貼り付ける位置（中心）を決める
+        // 中指の付け根（ランドマーク 9）をアンカーにする
+        const anchor = matchingHandLandmarks[9];
+
+        // MediaPipeの座標（0.0〜1.0）を、CSSのピクセル座標（%）に変換
+        // 映像がscaleX(-1)で反転しているため、X座標の計算を補正 (1 - x)
+        const posX = (1 - anchor.x) * 100; 
+        const posY = anchor.y * 100;
+
+        // B. 画像のサイズ（遠近感）を決める
+        // 手首(0)と人差指の付け根(5)の距離を「手の大きさの基準」とする
+        const handSize = getDistance(matchingHandLandmarks[0], matchingHandLandmarks[5]);
+        
+        // 基準となる画像の太さ（画面横幅に対する割合。調整可能）
+        const baseWidthPercent = 30; 
+        // 手の大きさ（手首〜人差指根元の距離）に比例して画像を拡縮
+        // 手が画面いっぱい（距離1.0）の時、横幅の120%になるような倍率(4)を掛ける（感覚値）
+        const finalWidth = baseWidthPercent * (handSize * 4); 
+
+        // C. CSSを毎フレーム書き換えて画像を動かす
+        targetImage.style.left = `${posX}%`;
+        targetImage.style.top = `${posY}%`;
+        targetImage.style.width = `${finalWidth}%`; // %で指定することでコンテナサイズに追従
+      }
+
+    } else {
+      // 条件から外れたらリセット（フェードアウト）
+      gestureStartTime = null;
+      if (isImageShown) {
+        targetImage.style.opacity = 0;
+        isImageShown = false;
+        // 次回の表示のためにサイズをリセット
+        targetImage.style.width = "0px"; 
+      }
+      progressText.innerText = "待機中...";
+    }
+  }
+
+  // MediaPipe Handsの初期化（プロトタイプなのでmaxNumHandsは2のまま維持）
+  const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+  hands.setOptions({
+    maxNumHands: 2, 
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7, // 認識精度を少し上げる
+    minTrackingConfidence: 0.7
+  });
+  hands.onResults(onResults);
+
+  // カメラの起動
+  const camera = new Camera(videoElement, {
+    onFrame: async () => { await hands.send({image: videoElement}); },
+    width: 1280, height: 960 // 推論解像度を上げる
+  });
+  camera.start();
 </script>
 
 </body>
