@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>表示画面 - カメラ認識</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    .container { position: relative; width: 100%; max-width: 800px; aspect-ratio: 4/3; }
+    /* カメラ映像（左右反転させる） */
+    .input_video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 1; }
+    /* 骨格描画キャンバス（映像に合わせるためこれも反転） */
+    .output_canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 2; }
+    /* オーバーレイ画像（フェードイン/アウト） */
+    .overlay_image { 
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain;
+      z-index: 3; opacity: 0; transition: opacity 0.5s ease; pointer-events: none;
+    }
+    /* ゲージ表示用 */
+    #progress { position: absolute; top: 10px; left: 10px; color: lime; font-weight: bold; z-index: 4; font-size: 24px; text-shadow: 1px 1px 2px #000; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <video class="input_video" autoplay playsinline></video>
+  <canvas class="output_canvas" width="800" height="600"></canvas>
+  <img class="overlay_image" id="targetImage" src="">
+  <div id="progress">待機中...</div>
+</div>
+
+<script>
+  const videoElement = document.querySelector('.input_video');
+  const canvasElement = document.querySelector('.output_canvas');
+  const canvasCtx = canvasElement.getContext('2d');
+  const targetImage = document.getElementById('targetImage');
+  const progressText = document.getElementById('progress');
+
+  // 初期設定（管理画面から受信するまでの一時データ）
+  let config = {
+    showSkeleton: true, imageUrl: "", durationSeconds: 2.0, targetHand: "Both",
+    fingers: { thumb: "Ignore", index: "Extended", middle: "Extended", ring: "Bent", pinky: "Bent" }
+  };
+
+  // BroadcastChannelで設定を受信
+  const bc = new BroadcastChannel('hand-gesture-channel');
+  bc.onmessage = (event) => {
+    config = event.data;
+    targetImage.src = config.imageUrl;
+    if(!config.showSkeleton) canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  };
+
+  // 判定用変数
+  let gestureStartTime = null;
+  let isImageShown = false;
+
+  // 指の曲げ判定ロジック（簡易版：Y座標での比較。手が上を向いている前提）
+  function checkFinger(landmarks, tipIdx, pipIdx, state) {
+    if (state === "Ignore") return true;
+    // 指先(tip)のY座標が第2関節(pip)より下(数値が大きい)なら曲がっていると判定
+    const isBent = landmarks[tipIdx].y > landmarks[pipIdx].y;
+    return state === "Bent" ? isBent : !isBent;
+  }
+
+  // 親指の判定（X座標での距離判定など工夫が必要だが、プロトタイプとして簡易的に実装）
+  function checkThumb(landmarks, state) {
+    if (state === "Ignore") return true;
+    // 親指の先端(4)が、小指の付け根(17)に近いかどうかで曲がりを判定
+    const distanceX = Math.abs(landmarks[4].x - landmarks[17].x);
+    const isBent = distanceX < 0.1; // 閾値は感覚値
+    return state === "Bent" ? isBent : !isBent;
+  }
+
+  // MediaPipeの推論結果が返ってきた時の処理
+  function onResults(results) {
+    if (config.showSkeleton) {
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      if (results.multiHandLandmarks) {
+        for (const landmarks of results.multiHandLandmarks) {
+          drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
+          drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
+        }
+      }
+      canvasCtx.restore();
+    }
+
+    let isAnyHandMatching = false;
+
+    if (results.multiHandLandmarks && results.multiHandedness) {
+      for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+        const landmarks = results.multiHandLandmarks[i];
+        let handLabel = results.multiHandedness[i].label; // "Left" or "Right"
+        
+        // ★重要: カメラ映像を左右反転させているため、MediaPipeの左右判定も反転させる
+        handLabel = handLabel === "Left" ? "Right" : "Left";
+
+        // 左右の指定チェック
+        if (config.targetHand !== "Both" && config.targetHand !== handLabel) continue;
+
+        // 指の形チェック
+        const thumbMatch = checkThumb(landmarks, config.fingers.thumb);
+        const indexMatch = checkFinger(landmarks, 8, 6, config.fingers.index);
+        const middleMatch = checkFinger(landmarks, 12, 10, config.fingers.middle);
+        const ringMatch = checkFinger(landmarks, 16, 14, config.fingers.ring);
+        const pinkyMatch = checkFinger(landmarks, 20, 18, config.fingers.pinky);
+
+        if (thumbMatch && indexMatch && middleMatch && ringMatch && pinkyMatch) {
+          isAnyHandMatching = true;
+          break;
+        }
+      }
+    }
+
+    // 維持時間のカウントアップ / リセット処理
+    if (isAnyHandMatching) {
+      if (!gestureStartTime) gestureStartTime = Date.now();
+      
+      let elapsed = (Date.now() - gestureStartTime) / 1000;
+      progressText.innerText = `認識中... ${elapsed.toFixed(1)} / ${config.durationSeconds} 秒`;
+
+      if (elapsed >= config.durationSeconds && !isImageShown) {
+        targetImage.style.opacity = 1;
+        isImageShown = true;
+        progressText.innerText = "完了！";
+      }
+    } else {
+      gestureStartTime = null;
+      if (isImageShown) {
+        targetImage.style.opacity = 0;
+        isImageShown = false;
+      }
+      progressText.innerText = "待機中...";
+    }
+  }
+
+  // MediaPipe Handsの初期化
+  const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+  hands.setOptions({
+    maxNumHands: 2, // プロトタイプなので動作を軽くするために2に設定
+    modelComplexity: 1,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+  hands.onResults(onResults);
+
+  // カメラの起動
+  const camera = new Camera(videoElement, {
+    onFrame: async () => { await hands.send({image: videoElement}); },
+    width: 800, height: 600
+  });
+  camera.start();
+</script>
+
+</body>
+</html>
