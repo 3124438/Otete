@@ -260,10 +260,10 @@
       <div class="toggle-row">
         <div>
           <div class="toggle-label">骨格（スケルトン）表示</div>
-          <div class="toggle-desc">MediaPipeのランドマーク＆接続線を表示する</div>
+          <div class="toggle-desc">スプレッドシートのJ2セルで制御（TRUE=表示）</div>
         </div>
         <label class="toggle">
-          <input type="checkbox" id="show-skeleton" checked onchange="broadcastConfig()">
+          <input type="checkbox" id="show-skeleton" disabled>
           <span class="toggle-slider"></span>
         </label>
       </div>
@@ -320,9 +320,6 @@
 const LS_KEY_URL = 'gas_url';
 let gasUrl   = localStorage.getItem(LS_KEY_URL) || '';
 let allGestures = [];   // 取得した全行（enabled含む）
-let fetchTimer  = null;
-const POLL_MS   = 5000;
-
 const channel = new BroadcastChannel('hand-gesture-channel');
 
 // ================================================================
@@ -486,6 +483,7 @@ async function toggleRow(localIdx, rowIndex, cbEl, trEl) {
 //  BroadcastChannel で表示画面に送信
 // ================================================================
 function broadcastConfig() {
+  // showSkeleton はスプシのJ2から取得した値（トグルのchecked状態をそのまま使う）
   const showSkeleton = document.getElementById('show-skeleton').checked;
   channel.postMessage({
     type: 'config',
@@ -496,27 +494,7 @@ function broadcastConfig() {
   });
 }
 
-// ================================================================
-//  ポーリング
-// ================================================================
-function startPolling() {
-  clearInterval(fetchTimer);
-  if (gasUrl) fetchTimer = setInterval(fetchNow, POLL_MS);
-}
 
-// GAS URL変更でポーリング再起動
-document.addEventListener('DOMContentLoaded', () => {
-  if (gasUrl) startPolling();
-});
-
-function saveAndFetchAndPoll() {
-  saveAndFetch();
-  startPolling();
-}
-
-// ----------------------------------------------------------------
-//  上書き: saveAndFetch → saveAndFetchAndPoll に差し替え
-document.querySelector('.btn[onclick="saveAndFetch()"]').setAttribute('onclick', 'saveAndFetchAndPoll()');
 
 // ================================================================
 //  UI helpers
