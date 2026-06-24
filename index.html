@@ -11,25 +11,23 @@
     #video {
       position: absolute; inset: 0;
       width: 100%; height: 100%;
-      object-fit: cover;
-      transform: scaleX(-1);
-      z-index: 1;
+      object-fit: cover; transform: scaleX(-1); z-index: 1;
     }
     #skeleton-canvas {
       position: absolute; inset: 0;
       width: 100%; height: 100%;
       z-index: 2; pointer-events: none;
     }
+    /* 手のオーバーレイ（img/video共通） */
     .hand-overlay {
       position: absolute; z-index: 3;
-      pointer-events: none;
-      object-fit: contain;
+      pointer-events: none; object-fit: contain;
       transition: opacity 0.35s ease;
     }
+    /* HUD */
     #hud {
-      position: absolute; top: 0; left: 0; right: 0;
-      z-index: 10; padding: 12px 16px;
-      display: flex; align-items: center; gap: 8px;
+      position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+      padding: 12px 16px; display: flex; align-items: center; gap: 8px;
       background: linear-gradient(to bottom, rgba(0,0,0,.65) 0%, transparent 100%);
       pointer-events: none;
     }
@@ -40,6 +38,20 @@
     }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
     #hud-status { font-size: 12px; color: rgba(255,255,255,.5); font-family: sans-serif; }
+    /* スタートオーバーレイ */
+    #start-screen {
+      position: absolute; inset: 0; z-index: 50;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(10,14,26,0.92); gap: 20px; font-family: sans-serif;
+    }
+    #start-screen p { color: rgba(255,255,255,.6); font-size: 14px; }
+    #start-btn {
+      background: linear-gradient(135deg, #00d4ff, #7b8cde);
+      border: none; border-radius: 12px; color: #0a0e1a;
+      font-size: 16px; font-weight: 700; padding: 16px 40px; cursor: pointer;
+      transition: opacity .2s;
+    }
+    #start-btn:hover { opacity: .85; }
     #no-camera {
       position: absolute; inset: 0; display: flex;
       flex-direction: column; align-items: center; justify-content: center;
@@ -62,6 +74,11 @@
     </svg>
     <p>カメラを初期化中...</p>
   </div>
+  <!-- 音声自動再生ブロック回避用スタートボタン -->
+  <div id="start-screen">
+    <p>タップして開始してください</p>
+    <button id="start-btn">▶ スタート</button>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -72,27 +89,30 @@
 // ================================================================
 //  ★ デプロイ後にGAS WebアプリURLを設定してください
 // ================================================================
-const GAS_URL        = 'https://script.google.com/macros/s/AKfycbwEYkaERsXo14zXp0TiouBQEGwtcUkziGLVlV-4fpJlQssnQku-CGlWDBLFQNJIycL3/exec';
-// fetchはadmin.htmlのボタン操作経由(BroadcastChannel)のみ
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbxsWQWyk2aclzu7AmiFJIjFzx8wQOw2M81htZz5wkU6_bbruo-teKao_UxePAyouM89/exec';
 
 // ================================================================
 //  グローバル状態
 // ================================================================
-let gestures     = [];
-let showSkeleton = true;
+let gestures      = [];
+let showSkeleton  = true;
+let audioUnlocked = false; // スタートボタン押下後にtrue
 
 // handIdx-gestureIdx ごとのタイマー状態
+// { startTime, triggered, audioPlayed }
 const handStates = {};
 
 // ================================================================
 //  DOM
 // ================================================================
-const videoEl   = document.getElementById('video');
-const canvasEl  = document.getElementById('skeleton-canvas');
-const ctx       = canvasEl.getContext('2d');
-const hudStatus = document.getElementById('hud-status');
-const noCameraEl= document.getElementById('no-camera');
-const scene     = document.getElementById('scene');
+const videoEl    = document.getElementById('video');
+const canvasEl   = document.getElementById('skeleton-canvas');
+const ctx        = canvasEl.getContext('2d');
+const hudStatus  = document.getElementById('hud-status');
+const noCameraEl = document.getElementById('no-camera');
+const scene      = document.getElementById('scene');
+const startScreen= document.getElementById('start-screen');
+const startBtn   = document.getElementById('start-btn');
 
 function resizeCanvas() {
   canvasEl.width  = window.innerWidth;
@@ -102,25 +122,76 @@ window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
 // ================================================================
-//  オーバーレイ画像プール  key: "hi-gi" → <img>
+//  スタートボタン：音声自動再生ブロック解除
+// ================================================================
+startBtn.addEventListener('click', () => {
+  audioUnlocked = true;
+  startScreen.style.display = 'none';
+  // ダミー再生で自動再生ポリシーをアンロック
+  const dummy = new Audio();
+  dummy.play().catch(() => {});
+});
+
+// ================================================================
+//  オーバーレイ要素プール  key: "hi-gi" → { el, type }
 // ================================================================
 const overlayPool = {};
 
-function getOrCreateOverlay(hi, gi) {
+function getOrCreateOverlay(hi, gi, mediaType) {
   const key = hi + '-' + gi;
-  if (!overlayPool[key]) {
-    const img = document.createElement('img');
-    img.className = 'hand-overlay';
-    img.style.opacity = '0';
-    img.style.display = 'none';
-    scene.appendChild(img);
-    overlayPool[key] = img;
+  const existing = overlayPool[key];
+
+  // タイプが変わった場合は作り直し
+  if (existing && existing.type !== mediaType) {
+    existing.el.remove();
+    delete overlayPool[key];
   }
-  return overlayPool[key];
+
+  if (!overlayPool[key]) {
+    let el;
+    if (mediaType === 'video') {
+      el = document.createElement('video');
+      el.autoplay    = true;
+      el.loop        = true;
+      el.muted       = true;
+      el.playsInline = true;
+      el.setAttribute('playsinline', '');
+    } else {
+      el = document.createElement('img');
+    }
+    el.className    = 'hand-overlay';
+    el.style.opacity = '0';
+    el.style.display = 'none';
+    scene.appendChild(el);
+    overlayPool[key] = { el, type: mediaType };
+  }
+  return overlayPool[key].el;
 }
 
 // ================================================================
-//  GAS fetch
+//  音声プール  key: audioUrl → Audio
+// ================================================================
+const audioPool = {};
+
+function getAudio(url) {
+  if (!url) return null;
+  if (!audioPool[url]) {
+    audioPool[url] = new Audio(url);
+    audioPool[url].preload = 'auto';
+  }
+  return audioPool[url];
+}
+
+function playAudio(url) {
+  if (!audioUnlocked || !url) return;
+  const audio = getAudio(url);
+  if (!audio) return;
+  audio.currentTime = 0;
+  audio.play().catch(e => console.warn('audio play failed:', e));
+}
+
+// ================================================================
+//  GAS fetch（ボタン押下時 or BroadcastChannel経由）
 // ================================================================
 async function fetchConfig() {
   if (!GAS_URL || GAS_URL === 'YOUR_GAS_WEBAPP_URL_HERE') return;
@@ -128,24 +199,39 @@ async function fetchConfig() {
     const res  = await fetch(GAS_URL, { cache: 'no-store' });
     const data = await res.json();
     if (data.error) { console.warn('GAS error:', data.error); return; }
-    applyConfig(data);
+    applyConfig(data, 'spreadsheet');
+    hudStatus.textContent = '設定取得済 (' + data.enabled + '件有効)';
   } catch (e) {
     console.error('fetch error:', e);
     hudStatus.textContent = 'GAS接続エラー';
   }
 }
 
-function applyConfig(data) {
-  showSkeleton = !!data.showSkeleton;
+// ================================================================
+//  設定適用（source: 'spreadsheet' | 'admin'）
+//  admin からの受信はスプシ値を上書き（骨格表示のみ）
+// ================================================================
+function applyConfig(data, source) {
+  // 骨格表示: adminからの明示的な上書きを最優先
+  if (source === 'admin' && data.showSkeletonOverride !== undefined) {
+    showSkeleton = data.showSkeletonOverride;
+  } else if (source === 'spreadsheet') {
+    showSkeleton = !!data.showSkeleton;
+  }
   canvasEl.style.display = showSkeleton ? 'block' : 'none';
-  gestures = (data.gestures || []).filter(g => g.enabled);
-  hudStatus.textContent = '設定取得済 (' + gestures.length + '件有効)';
+
+  // ジェスチャー設定はどちらのソースでも更新
+  if (data.gestures !== undefined) {
+    gestures = data.gestures.filter(g => g.enabled);
+  }
 }
 
-// BroadcastChannel（admin.htmlからのリアルタイム反映）
+// BroadcastChannel受信
 const channel = new BroadcastChannel('hand-gesture-channel');
 channel.onmessage = (e) => {
-  if (e.data && e.data.type === 'config') applyConfig(e.data.payload);
+  if (e.data && e.data.type === 'config') {
+    applyConfig(e.data.payload, 'admin');
+  }
 };
 
 // ================================================================
@@ -161,18 +247,16 @@ function isExtended(lms, finger) {
     const refSize = Math.hypot(lms[5].x - w.x, lms[5].y - w.y);
 
     // 【A】距離判定: 親指先端(4) → 第2関節(2) の長さが基準の0.55未満 → Bent
-    const thumbLen = Math.hypot(lms[4].x - lms[2].x, lms[4].y - lms[2].y);
-    const isBentByLength = (thumbLen / refSize) < 0.55;
+    const thumbLen      = Math.hypot(lms[4].x - lms[2].x, lms[4].y - lms[2].y);
+    const isBentByLen   = (thumbLen / refSize) < 0.55;
 
-    // 【B】位置判定: 親指先端(4) が中指付け根(9)または薬指付け根(13)に近い → Bent
-    const distToMid  = Math.hypot(lms[4].x - lms[9].x,  lms[4].y - lms[9].y);
-    const distToRing = Math.hypot(lms[4].x - lms[13].x, lms[4].y - lms[13].y);
-    const minDist    = Math.min(distToMid, distToRing);
-    const isBentByPos = (minDist / refSize) < 0.35
-                     || lms[4].y > lms[5].y; // 先端が人差し指付け根より手首側に潜り込んでいる
+    // 【B】位置判定: 親指先端(4) が中指付け根(9)/薬指付け根(13)に近い → Bent
+    const distToMid     = Math.hypot(lms[4].x - lms[9].x,  lms[4].y - lms[9].y);
+    const distToRing    = Math.hypot(lms[4].x - lms[13].x, lms[4].y - lms[13].y);
+    const isBentByPos   = (Math.min(distToMid, distToRing) / refSize) < 0.35
+                       || lms[4].y > lms[5].y;
 
-    // どちらか一方でもBentならExtendedではない
-    return !(isBentByLength || isBentByPos);
+    return !(isBentByLen || isBentByPos);
   }
   const tip = lms[TIPS[finger]], pip = lms[PIPS[finger]];
   return Math.hypot(tip.x-w.x, tip.y-w.y) > Math.hypot(pip.x-w.x, pip.y-w.y) * 1.05;
@@ -180,8 +264,7 @@ function isExtended(lms, finger) {
 
 function fingerOk(lms, finger, cond) {
   if (cond === 'Ignore') return true;
-  const ext = isExtended(lms, finger);
-  return cond === 'Extended' ? ext : !ext;
+  return cond === 'Extended' ? isExtended(lms, finger) : !isExtended(lms, finger);
 }
 
 function matchGesture(lms, handedness, gesture) {
@@ -197,12 +280,12 @@ function matchGesture(lms, handedness, gesture) {
 }
 
 // ================================================================
-//  手のバウンディングボックス（画面座標、映像ミラーを考慮）
+//  手のバウンディングボックス（ミラー補正済み画面座標）
 // ================================================================
 function getHandBounds(lms) {
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
   for (const lm of lms) {
-    const sx = (1 - lm.x) * canvasEl.width;   // ミラー補正
+    const sx = (1 - lm.x) * canvasEl.width;
     const sy = lm.y * canvasEl.height;
     if (sx < minX) minX = sx;
     if (sy < minY) minY = sy;
@@ -221,18 +304,17 @@ function getHandBounds(lms) {
 function onResults(results) {
   ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 
-  const handCount = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
+  const handCount  = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
   const activeKeys = new Set();
-  const nowMs = performance.now();
+  const nowMs      = performance.now();
 
   for (let hi = 0; hi < handCount; hi++) {
     const lms        = results.multiHandLandmarks[hi];
     const handedness = results.multiHandedness[hi];
     const bounds     = getHandBounds(lms);
 
-    // 骨格描画（scaleX(-1)をCanvasで再現: 座標を反転して描画）
+    // 骨格描画（ミラー反転）
     if (showSkeleton) {
-      // ミラー反転した座標系で描画するためctxを変換
       ctx.save();
       ctx.scale(-1, 1);
       ctx.translate(-canvasEl.width, 0);
@@ -241,51 +323,67 @@ function onResults(results) {
       ctx.restore();
     }
 
-    // 各ジェスチャー設定とのマッチング
     for (let gi = 0; gi < gestures.length; gi++) {
-      const g   = gestures[gi];
-      const key = hi + '-' + gi;
-      if (!handStates[key]) handStates[key] = { startTime: null };
-      const state = handStates[key];
-      const img   = getOrCreateOverlay(hi, gi);
+      const g      = gestures[gi];
+      const key    = hi + '-' + gi;
+      if (!handStates[key]) handStates[key] = { startTime: null, triggered: false, audioPlayed: false };
+      const state  = handStates[key];
+      const el     = getOrCreateOverlay(hi, gi, g.mediaType);
 
-      // 画像URL更新
-      if (g.imageUrl && img.dataset.url !== g.imageUrl) {
-        img.src = g.imageUrl;
-        img.dataset.url = g.imageUrl;
+      // メディアURL更新
+      if (el.dataset.url !== g.mediaUrl) {
+        el.src = g.mediaUrl;
+        el.dataset.url = g.mediaUrl;
       }
 
       if (matchGesture(lms, handedness, g)) {
-        if (state.startTime === null) state.startTime = nowMs;
+        if (state.startTime === null) {
+          state.startTime  = nowMs;
+          state.triggered  = false;
+          state.audioPlayed= false;
+        }
+
         if (nowMs - state.startTime >= g.duration * 1000) {
-          // 条件達成 → 手の上に配置
+          // 条件達成 → 配置
           const half = bounds.size / 2;
-          img.style.display = 'block';
-          img.style.opacity = '1';
-          img.style.left    = (bounds.cx - half) + 'px';
-          img.style.top     = (bounds.cy - half) + 'px';
-          img.style.width   = bounds.size + 'px';
-          img.style.height  = bounds.size + 'px';
+          el.style.display = 'block';
+          el.style.opacity = '1';
+          el.style.left    = (bounds.cx - half) + 'px';
+          el.style.top     = (bounds.cy - half) + 'px';
+          el.style.width   = bounds.size + 'px';
+          el.style.height  = bounds.size + 'px';
           activeKeys.add(key);
+
+          // 音声: 初回トリガー時に1回だけ
+          if (!state.audioPlayed && g.audioUrl) {
+            playAudio(g.audioUrl);
+            state.audioPlayed = true;
+          }
+          state.triggered = true;
         }
       } else {
-        state.startTime = null;
+        state.startTime  = null;
+        state.triggered  = false;
+        state.audioPlayed= false;
       }
     }
   }
 
-  // 非アクティブなオーバーレイを隠す
-  for (const [key, img] of Object.entries(overlayPool)) {
+  // 非アクティブを非表示
+  for (const [key, obj] of Object.entries(overlayPool)) {
     if (!activeKeys.has(key)) {
-      img.style.opacity = '0';
-      img.style.display = 'none';
+      obj.el.style.opacity = '0';
+      obj.el.style.display = 'none';
     }
   }
 
-  // フレームから消えた手のstateリセット
+  // 消えた手のstateリセット
   for (const key of Object.keys(handStates)) {
-    const hi = parseInt(key.split('-')[0], 10);
-    if (hi >= handCount) handStates[key].startTime = null;
+    if (parseInt(key.split('-')[0], 10) >= handCount) {
+      handStates[key].startTime   = null;
+      handStates[key].triggered   = false;
+      handStates[key].audioPlayed = false;
+    }
   }
 }
 
@@ -296,10 +394,8 @@ const hands = new Hands({
   locateFile: f => 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/' + f
 });
 hands.setOptions({
-  maxNumHands: 10,
-  modelComplexity: 1,
-  minDetectionConfidence: 0.5,
-  minTrackingConfidence: 0.5,
+  maxNumHands: 10, modelComplexity: 1,
+  minDetectionConfidence: 0.5, minTrackingConfidence: 0.5,
 });
 hands.onResults(onResults);
 
@@ -329,8 +425,7 @@ async function startCamera() {
 }
 
 startCamera();
-
-
+fetchConfig();
 </script>
 </body>
 </html>
