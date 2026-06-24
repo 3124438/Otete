@@ -157,8 +157,22 @@ const PIPS = {          index:6,  middle:10, ring:14, pinky:18 };
 function isExtended(lms, finger) {
   const w = lms[0];
   if (finger === 'thumb') {
-    const tip = lms[4], mcp = lms[2];
-    return Math.hypot(tip.x-w.x, tip.y-w.y) > Math.hypot(mcp.x-w.x, mcp.y-w.y) * 1.15;
+    // 手の基準サイズ: 手首(0) → 人差し指付け根(5)
+    const refSize = Math.hypot(lms[5].x - w.x, lms[5].y - w.y);
+
+    // 【A】距離判定: 親指先端(4) → 第2関節(2) の長さが基準の0.55未満 → Bent
+    const thumbLen = Math.hypot(lms[4].x - lms[2].x, lms[4].y - lms[2].y);
+    const isBentByLength = (thumbLen / refSize) < 0.55;
+
+    // 【B】位置判定: 親指先端(4) が中指付け根(9)または薬指付け根(13)に近い → Bent
+    const distToMid  = Math.hypot(lms[4].x - lms[9].x,  lms[4].y - lms[9].y);
+    const distToRing = Math.hypot(lms[4].x - lms[13].x, lms[4].y - lms[13].y);
+    const minDist    = Math.min(distToMid, distToRing);
+    const isBentByPos = (minDist / refSize) < 0.35
+                     || lms[4].y > lms[5].y; // 先端が人差し指付け根より手首側に潜り込んでいる
+
+    // どちらか一方でもBentならExtendedではない
+    return !(isBentByLength || isBentByPos);
   }
   const tip = lms[TIPS[finger]], pip = lms[PIPS[finger]];
   return Math.hypot(tip.x-w.x, tip.y-w.y) > Math.hypot(pip.x-w.x, pip.y-w.y) * 1.05;
