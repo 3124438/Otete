@@ -235,31 +235,89 @@ channel.onmessage = (e) => {
 };
 
 // ================================================================
-//  指の曲げ伸ばし判定
+//  指の曲げ伸ばし判定（直線度 & 親指離脱度アルゴリズム）
 // ================================================================
-const TIPS = { thumb:4, index:8,  middle:12, ring:16, pinky:20 };
-const PIPS = {          index:6,  middle:10, ring:14, pinky:18 };
 
+// ランドマークID定義
+// 各指: [MCP, PIP, DIP, TIP]
+const FINGER_LMS = {
+  index : [5,  6,  7,  8 ],
+  middle: [9,  10, 11, 12],
+  ring  : [13, 14, 15, 16],
+  pinky : [17, 18, 19, 20],
+};
+
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+// ---- 人差し〜小指：直線度判定 ----
+// 直線度 = MCP→TIP直線距離 ÷ (MCP-PIP + PIP-DIP + DIP-TIP の総和)
+// 0.90以上 → Extended、0.75未満 → Bent
+function fingerStraightness(lms, finger) {
+  const [mcp, pip, dip, tip] = FINGER_LMS[finger].map(i => lms[i]);
+  const straight = dist(mcp, tip);
+  const chain    = dist(mcp, pip) + dist(pip, dip) + dist(dip, tip);
+  if (chain === 0) return 1;
+  return straight / chain;
+}
+
+function isExtendedFinger(lms, finger) {
+  const s = fingerStraightness(lms, finger);
+  if (s >= 0.90) return true;   // 明確に伸びている
+  if (s <  0.75) return false;  // 明確に曲がっている
+  return null;                   // 判定不能（グレーゾーン）
+}
+
+// ---- 親指：手のひら領域からの離脱度判定 ----
+// 手のひら幅ベクトル = 人差し指付け根(5) → 小指付け根(17)
+// 親指先端(4)がこのラインから外側にどれだけ離れているかで判定
+function isExtendedThumb(lms) {
+  const tip  = lms[4];   // 親指先端
+  const idx  = lms[5];   // 人差し指付け根
+  const pin  = lms[17];  // 小指付け根
+  const palm = lms[9];   // 中指付け根（手のひら中心の目安）
+
+  // 手のひら幅
+  const palmWidth = dist(idx, pin);
+  if (palmWidth === 0) return null;
+
+  // 親指先端から「人差し指(5)〜小指(17)ライン」への垂直距離
+  // ラインの単位ベクトル
+  const lx = pin.x - idx.x, ly = pin.y - idx.y;
+  const len = Math.hypot(lx, ly);
+  const nx  = -ly / len, ny = lx / len; // 法線ベクトル（手のひら表面に垂直）
+
+  // 親指先端からidxへのベクトル
+  const tx = tip.x - idx.x, ty = tip.y - idx.y;
+
+  // ライン上の射影（0〜1で内側、範囲外で外側）
+  const proj = (tx * lx + ty * ly) / (len * len);
+  // 法線方向への距離（符号付き）
+  const perpDist = Math.abs(tx * nx + ty * ny);
+
+  // 親指先端が手のひら内に入り込んでいるか
+  // → 射影が0〜1の範囲内（指の付け根の間）かつ法線距離が近い
+  const insideLine = proj >= -0.1 && proj <= 1.1;
+  const nearPalm   = perpDist / palmWidth < 0.5;
+
+  // 親指先端から手のひら中心への距離
+  const distToCenter = dist(tip, palm);
+  const isClose      = distToCenter / palmWidth < 0.7;
+
+  if (insideLine && nearPalm) return false; // 手のひら内に潜り込み → Bent
+  if (isClose)                return false; // 手のひら中心に近い → Bent
+  return true;                              // 外側に開いている → Extended
+}
+
+// ---- 統合判定 ----
 function isExtended(lms, finger) {
-  const w = lms[0];
   if (finger === 'thumb') {
-    // 手の基準サイズ: 手首(0) → 人差し指付け根(5)
-    const refSize = Math.hypot(lms[5].x - w.x, lms[5].y - w.y);
-
-    // 【A】距離判定: 親指先端(4) → 第2関節(2) の長さが基準の0.55未満 → Bent
-    const thumbLen      = Math.hypot(lms[4].x - lms[2].x, lms[4].y - lms[2].y);
-    const isBentByLen   = (thumbLen / refSize) < 0.55;
-
-    // 【B】位置判定: 親指先端(4) が中指付け根(9)/薬指付け根(13)に近い → Bent
-    const distToMid     = Math.hypot(lms[4].x - lms[9].x,  lms[4].y - lms[9].y);
-    const distToRing    = Math.hypot(lms[4].x - lms[13].x, lms[4].y - lms[13].y);
-    const isBentByPos   = (Math.min(distToMid, distToRing) / refSize) < 0.35
-                       || lms[4].y > lms[5].y;
-
-    return !(isBentByLen || isBentByPos);
+    const result = isExtendedThumb(lms);
+    return result !== null ? result : true; // グレーゾーンはExtendedとして扱う
   }
-  const tip = lms[TIPS[finger]], pip = lms[PIPS[finger]];
-  return Math.hypot(tip.x-w.x, tip.y-w.y) > Math.hypot(pip.x-w.x, pip.y-w.y) * 1.05;
+  const result = isExtendedFinger(lms, finger);
+  return result !== null ? result : true;   // グレーゾーンはExtendedとして扱う
 }
 
 function fingerOk(lms, finger, cond) {
